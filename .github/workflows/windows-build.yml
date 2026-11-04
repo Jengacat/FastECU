@@ -1,11 +1,12 @@
 name: Windows build
 
-# Builds FastECU for Windows with MSYS2 (MinGW + Qt 6) and uploads a zip
+# Builds FastECU for Windows with MinGW and uploads a zip
 # containing FastECU.exe and the DLLs it needs. Two builds:
-#   - i686 (32-bit): FastECU looks up J2534 drivers in the 32-bit registry
-#     view, and the Tactrix OpenPort driver (op20pt32.dll) is 32-bit, which
-#     a 64-bit program cannot load.
-#   - x86_64 (64-bit): kept for comparison and for 64-bit J2534 drivers.
+#   - build32 (i686, Qt 5.15.2 official MinGW 8.1 32-bit; MSYS2 has no 32-bit
+#     Qt 6): FastECU looks up J2534 drivers in the 32-bit registry view, and
+#     the Tactrix OpenPort driver (op20pt32.dll) is 32-bit, which a 64-bit
+#     program cannot load. This is the build to use with an OpenPort.
+#   - build (x86_64, MSYS2 Qt 6): kept for comparison.
 
 on:
   push:
@@ -19,8 +20,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - sys: MINGW32
-            arch: i686
           - sys: MINGW64
             arch: x86_64
     defaults:
@@ -53,7 +52,7 @@ jobs:
           mkdir -p build && cd build
           qmake6 ../FastECU.pro CONFIG+=release \
             "INCLUDEPATH+=$P/include" \
-            "LIBS+=-L$(cygpath -m "$GITHUB_WORKSPACE/ci-lib")"
+            "LIBS+=-L$(cygpath -m "$GITHUB_WORKSPACE/ci-lib") -lcrypto-3"
 
       - name: Build
         run: cd build && mingw32-make -j4
@@ -79,3 +78,66 @@ jobs:
         with:
           name: FastECU-windows-${{ matrix.arch }}
           path: FastECU-${{ matrix.arch }}
+
+  build32:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: windows
+          target: desktop
+          arch: win32_mingw81
+          modules: 'qtcharts'
+          tools: 'tools_mingw,qt.tools.win32_mingw810'
+
+      # OpenSSL 3 for 32-bit MinGW (headers, import library, DLL) from MSYS2.
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW32
+          update: true
+          pacboy: openssl:p
+
+      - name: Configure
+        run: |
+          M="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/mingw32"
+          ls "$M/bin"/libcrypto*.dll
+          mkdir -p ci-ossl/lib ci-ossl/bin
+          cp -r "$M/include/openssl" ci-ossl/
+          mkdir -p ci-ossl/include && mv ci-ossl/openssl ci-ossl/include/
+          cp "$M/lib/libcrypto.dll.a" ci-ossl/lib/libcrypto-3.dll.a
+          cp "$M"/bin/libcrypto*.dll ci-ossl/bin/
+          G=$(ls -d "$IQTA_TOOLS"/mingw810_32/bin 2>/dev/null || ls -d "$(cygpath -u "$IQTA_TOOLS")"/mingw810_32/bin)
+          echo "$G" >> $GITHUB_PATH
+          export PATH="$G:$PATH"
+          gcc --version | head -1
+          W=$(cygpath -m "$GITHUB_WORKSPACE")
+          mkdir -p build && cd build
+          qmake ../FastECU.pro CONFIG+=release \
+            "INCLUDEPATH+=$W/ci-ossl/include" \
+            "LIBS+=-L$W/ci-ossl/lib -lcrypto-3"
+
+      - name: Build
+        run: cd build && mingw32-make -j4
+
+      - name: Package
+        run: |
+          OUT=FastECU-i686
+          mkdir -p "$OUT"
+          cp build/release/FastECU.exe "$OUT/"
+          windeployqt --release --no-translations --compiler-runtime "$OUT/FastECU.exe"
+          cp ci-ossl/bin/*.dll "$OUT/"
+          G=$(dirname "$(which gcc)")
+          for d in libgcc_s_dw2-1.dll libstdc++-6.dll libwinpthread-1.dll; do [ -f "$OUT/$d" ] || cp "$G/$d" "$OUT/" || true; done
+          ls "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastECU-windows-i686
+          path: FastECU-i686
