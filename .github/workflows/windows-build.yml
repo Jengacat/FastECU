@@ -59,20 +59,23 @@ jobs:
 
       - name: Package
         run: |
-          EXE=$(ls build/release/FastECU.exe build/FastECU.exe 2>/dev/null | head -1)
+          set -x
+          ls build build/release | head -50 || true
+          EXE=$(ls build/release/FastECU.exe build/FastECU.exe 2>/dev/null | head -1 || true)
           test -n "$EXE"
           OUT=FastECU-${{ matrix.arch }}
           mkdir -p "$OUT"
           cp "$EXE" "$OUT/"
-          windeployqt6 --release --no-translations "$OUT/FastECU.exe" || windeployqt-qt6 --release --no-translations "$OUT/FastECU.exe"
+          ls $MINGW_PREFIX/bin/*deployqt* || true
+          WDQ=$(ls $MINGW_PREFIX/bin/windeployqt6.exe $MINGW_PREFIX/bin/windeployqt-qt6.exe $MINGW_PREFIX/bin/windeployqt.exe 2>/dev/null | head -1 || true)
+          "$WDQ" --release --no-translations --verbose 1 "$OUT/FastECU.exe" || echo "windeployqt exit $?"
           # Copy the MinGW runtime and other non-Qt DLLs from the MSYS2 prefix.
           for i in 1 2 3; do
-            ldd "$OUT"/*.exe "$OUT"/*.dll 2>/dev/null | awk '{print $3}' | grep -i "^$MINGW_PREFIX/bin/" | sort -u | while read d; do
+            { ldd "$OUT"/*.exe "$OUT"/*.dll 2>/dev/null || true; } | awk '{print $3}' | { grep -i "^$MINGW_PREFIX/bin/" || true; } | sort -u | while read d; do
               [ -f "$OUT/$(basename "$d")" ] || cp "$d" "$OUT/"
             done
           done
-          file "$OUT/FastECU.exe" || true
-          ls "$OUT"
+          ls -R "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -131,11 +134,12 @@ jobs:
           OUT=FastECU-i686
           mkdir -p "$OUT"
           cp build/release/FastECU.exe "$OUT/"
-          windeployqt --release --no-translations --compiler-runtime "$OUT/FastECU.exe"
+          set -x
+          windeployqt --release --no-translations --compiler-runtime --verbose 2 "$OUT/FastECU.exe" || echo "windeployqt exit $?"
           cp ci-ossl/bin/*.dll "$OUT/"
           G=$(dirname "$(which gcc)")
           for d in libgcc_s_dw2-1.dll libstdc++-6.dll libwinpthread-1.dll; do [ -f "$OUT/$d" ] || cp "$G/$d" "$OUT/" || true; done
-          ls "$OUT"
+          ls -R "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
