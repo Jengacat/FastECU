@@ -1,0 +1,81 @@
+name: Windows build
+
+# Builds FastECU for Windows with MSYS2 (MinGW + Qt 6) and uploads a zip
+# containing FastECU.exe and the DLLs it needs. Two builds:
+#   - i686 (32-bit): FastECU looks up J2534 drivers in the 32-bit registry
+#     view, and the Tactrix OpenPort driver (op20pt32.dll) is 32-bit, which
+#     a 64-bit program cannot load.
+#   - x86_64 (64-bit): kept for comparison and for 64-bit J2534 drivers.
+
+on:
+  push:
+    branches: [ hitachi-sh72544-2.5mb ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sys: MINGW32
+            arch: i686
+          - sys: MINGW64
+            arch: x86_64
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.sys }}
+          update: true
+          pacboy: >-
+            toolchain:p
+            qt6-base:p
+            qt6-serialport:p
+            qt6-remoteobjects:p
+            qt6-websockets:p
+            qt6-charts:p
+            qt6-5compat:p
+            qt6-tools:p
+            openssl:p
+
+      - name: Configure
+        run: |
+          P=$(cygpath -m "$MINGW_PREFIX")
+          # FastECU.pro links -lcrypto-3 on Windows; MSYS2 ships libcrypto.dll.a.
+          mkdir -p ci-lib
+          cp "$MINGW_PREFIX/lib/libcrypto.dll.a" ci-lib/libcrypto-3.dll.a
+          mkdir -p build && cd build
+          qmake6 ../FastECU.pro CONFIG+=release \
+            "INCLUDEPATH+=$P/include" \
+            "LIBS+=-L$(cygpath -m "$GITHUB_WORKSPACE/ci-lib")"
+
+      - name: Build
+        run: cd build && mingw32-make -j4
+
+      - name: Package
+        run: |
+          EXE=$(ls build/release/FastECU.exe build/FastECU.exe 2>/dev/null | head -1)
+          test -n "$EXE"
+          OUT=FastECU-${{ matrix.arch }}
+          mkdir -p "$OUT"
+          cp "$EXE" "$OUT/"
+          windeployqt6 --release --no-translations "$OUT/FastECU.exe" || windeployqt-qt6 --release --no-translations "$OUT/FastECU.exe"
+          # Copy the MinGW runtime and other non-Qt DLLs from the MSYS2 prefix.
+          for i in 1 2 3; do
+            ldd "$OUT"/*.exe "$OUT"/*.dll 2>/dev/null | awk '{print $3}' | grep -i "^$MINGW_PREFIX/bin/" | sort -u | while read d; do
+              [ -f "$OUT/$(basename "$d")" ] || cp "$d" "$OUT/"
+            done
+          done
+          file "$OUT/FastECU.exe" || true
+          ls "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastECU-windows-${{ matrix.arch }}
+          path: FastECU-${{ matrix.arch }}
