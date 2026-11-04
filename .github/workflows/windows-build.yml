@@ -135,10 +135,28 @@ jobs:
           mkdir -p "$OUT"
           cp build/release/FastECU.exe "$OUT/"
           set -x
-          windeployqt --release --no-translations --compiler-runtime --verbose 2 "$OUT/FastECU.exe" || echo "windeployqt exit $?"
+          # windeployqt from Qt 5.15.2 cannot find the platform plugin here, so deploy by hand:
+          # every DLL the exe needs (recursively) from the Qt and MinGW bin folders, plus plugins.
           cp ci-ossl/bin/*.dll "$OUT/"
+          Q="$(cygpath -u "$QT_ROOT_DIR")"
           G=$(dirname "$(which gcc)")
-          for d in libgcc_s_dw2-1.dll libstdc++-6.dll libwinpthread-1.dll; do [ -f "$OUT/$d" ] || cp "$G/$d" "$OUT/" || true; done
+          for i in 1 2 3 4 5; do
+            for f in "$OUT"/*.exe "$OUT"/*.dll; do
+              objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'
+            done | sort -u | while read d; do
+              [ -f "$OUT/$d" ] && continue
+              for src in "$Q/bin/$d" "$G/$d"; do if [ -f "$src" ]; then cp "$src" "$OUT/"; break; fi; done
+            done || true
+          done
+          for pd in platforms styles imageformats iconengines bearer; do
+            if [ -d "$Q/plugins/$pd" ]; then mkdir -p "$OUT/$pd"; cp "$Q/plugins/$pd"/*.dll "$OUT/$pd/"; fi
+          done
+          # Second pass for the plugins' own dependencies.
+          for f in "$OUT"/*/*.dll; do objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'; done | sort -u | while read d; do
+            if [ ! -f "$OUT/$d" ] && [ -f "$Q/bin/$d" ]; then cp "$Q/bin/$d" "$OUT/"; fi
+          done || true
+          echo "Imports not shipped (should all be Windows system DLLs):"
+          for f in "$OUT"/*.exe "$OUT"/*.dll "$OUT"/*/*.dll; do objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'; done | sort -u | while read d; do [ -f "$OUT/$d" ] || echo "  $d"; done || true
           ls -R "$OUT"
 
       - uses: actions/upload-artifact@v4
