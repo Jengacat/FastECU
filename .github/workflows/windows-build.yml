@@ -11,6 +11,8 @@ name: Windows build
 on:
   push:
     branches: [ hitachi-sh72544-2.5mb ]
+    # Pushing a tag like sh72544-test-1 also publishes a pre-release with both zips.
+    tags: [ 'sh72544-test-*' ]
   workflow_dispatch:
 
 jobs:
@@ -75,6 +77,7 @@ jobs:
               [ -f "$OUT/$(basename "$d")" ] || cp "$d" "$OUT/"
             done
           done
+          cp LICENSE "$OUT/LICENSE.txt"
           ls -R "$OUT"
 
       - uses: actions/upload-artifact@v4
@@ -157,9 +160,36 @@ jobs:
           done || true
           echo "Imports not shipped (should all be Windows system DLLs):"
           for f in "$OUT"/*.exe "$OUT"/*.dll "$OUT"/*/*.dll; do objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'; done | sort -u | while read d; do [ -f "$OUT/$d" ] || echo "  $d"; done || true
+          cp LICENSE "$OUT/LICENSE.txt"
           ls -R "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: FastECU-windows-i686
           path: FastECU-i686
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/sh72544-test-')
+    needs: [ build, build32 ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          for d in FastECU-windows-*; do
+            arch=${d#FastECU-windows-}
+            (cd "$d" && zip -qr "../../FastECU-$TAG-windows-$arch.zip" .)
+          done
+          cd ..
+          ls -la FastECU-*.zip
+          sed -e "s/@TAG@/$TAG/g" -e "s/@SHA@/${GITHUB_SHA}/g" .github/release-notes.md > notes.md
+          gh release create "$TAG" FastECU-*.zip --prerelease --title "Test build $TAG (2019+ 2.0 DIT 2.5 MB read)" --notes-file notes.md
