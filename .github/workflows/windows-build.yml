@@ -11,14 +11,10 @@ name: Windows build
 on:
   push:
     branches: [ hitachi-sh72544-2.5mb ]
-    # Pushing a tag like sh72544-test-1 also publishes a pre-release with both zips.
-    tags: [ 'sh72544-test-*' ]
+  # Publishing a release (Releases > Draft a new release) builds that tag and attaches both zips to it.
+  release:
+    types: [ published ]
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'To publish a pre-release, a new tag name such as sh72544-test-1 (leave empty to only build)'
-        required: false
-        default: ''
 
 jobs:
   build:
@@ -174,7 +170,7 @@ jobs:
           path: FastECU-i686
 
   release:
-    if: startsWith(github.ref, 'refs/tags/sh72544-test-') || inputs.release_tag != ''
+    if: github.event_name == 'release'
     needs: [ build, build32 ]
     runs-on: ubuntu-latest
     permissions:
@@ -187,7 +183,7 @@ jobs:
       - name: Publish pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag || github.ref_name }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           cd dist
           for d in FastECU-windows-*; do
@@ -197,4 +193,5 @@ jobs:
           cd ..
           ls -la FastECU-*.zip
           sed -e "s/@TAG@/$TAG/g" -e "s/@SHA@/${GITHUB_SHA}/g" .github/release-notes.md > notes.md
-          gh release create "$TAG" FastECU-*.zip --target "$GITHUB_SHA" --prerelease --title "Test build $TAG (2019+ 2.0 DIT 2.5 MB read)" --notes-file notes.md
+          gh release upload "$TAG" FastECU-*.zip --clobber
+          gh release edit "$TAG" --prerelease --title "Test build $TAG (2019+ 2.0 DIT 2.5 MB read)" --notes-file notes.md
