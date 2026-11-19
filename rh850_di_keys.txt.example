@@ -1,0 +1,11 @@
+# RH850 DI SecurityAccess keys for the UDS-native module (sub_ecu_subaru_rh850_di_can).
+# Copy to rh850_di_keys.txt next to the FastECU executable (or the working dir) and fill in.
+# Each AES key is 16 bytes = 32 hex chars. The RayTuned seed_keys.txt keys do NOT authenticate -
+# use the real per-ECU keys (from RayTuned's working set, or recovered via seed-test on the car).
+
+gateway_l7:      00000000000000000000000000000000
+engine_read_l5:  00000000000000000000000000000000
+engine_flash_l1: 00000000000000000000000000000000
+
+# Flash transport cipher (validated). Leave as-is unless a car uses a different key.
+feistel:         B74042DAA7CA5FB1
