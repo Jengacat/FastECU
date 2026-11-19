@@ -37,6 +37,7 @@ jobs:
           update: true
           pacboy: >-
             toolchain:p
+            make:p
             qt6-base:p
             qt6-serialport:p
             qt6-remoteobjects:p
@@ -170,7 +171,9 @@ jobs:
           path: FastECU-i686
 
   release:
-    if: github.event_name == 'release'
+    # Release as long as the 32-bit build (the OpenPort driver target) succeeded,
+    # even if the x86_64/Qt6 job fails; attach whichever zips were produced.
+    if: github.event_name == 'release' && always() && needs.build32.result == 'success'
     needs: [ build, build32 ]
     runs-on: ubuntu-latest
     permissions:
