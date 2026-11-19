@@ -1,0 +1,197 @@
+name: Windows build
+
+# Builds FastECU for Windows with MinGW and uploads a zip
+# containing FastECU.exe and the DLLs it needs. Two builds:
+#   - build32 (i686, Qt 5.15.2 official MinGW 8.1 32-bit; MSYS2 has no 32-bit
+#     Qt 6): FastECU looks up J2534 drivers in the 32-bit registry view, and
+#     the Tactrix OpenPort driver (op20pt32.dll) is 32-bit, which a 64-bit
+#     program cannot load. This is the build to use with an OpenPort.
+#   - build (x86_64, MSYS2 Qt 6): kept for comparison.
+
+on:
+  push:
+    branches: [ hitachi-sh72544-2.5mb ]
+  # Publishing a release (Releases > Draft a new release) builds that tag and attaches both zips to it.
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sys: MINGW64
+            arch: x86_64
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.sys }}
+          update: true
+          pacboy: >-
+            toolchain:p
+            qt6-base:p
+            qt6-serialport:p
+            qt6-remoteobjects:p
+            qt6-websockets:p
+            qt6-charts:p
+            qt6-5compat:p
+            qt6-tools:p
+            openssl:p
+
+      - name: Configure
+        run: |
+          P=$(cygpath -m "$MINGW_PREFIX")
+          # FastECU.pro links -lcrypto-3 on Windows; MSYS2 ships libcrypto.dll.a.
+          mkdir -p ci-lib
+          cp "$MINGW_PREFIX/lib/libcrypto.dll.a" ci-lib/libcrypto-3.dll.a
+          mkdir -p build && cd build
+          qmake6 ../FastECU.pro CONFIG+=release \
+            "INCLUDEPATH+=$P/include" \
+            "LIBS+=-L$(cygpath -m "$GITHUB_WORKSPACE/ci-lib") -lcrypto-3"
+
+      - name: Build
+        run: cd build && mingw32-make -j4
+
+      - name: Package
+        run: |
+          set -x
+          ls build build/release | head -50 || true
+          EXE=$(ls build/release/FastECU.exe build/FastECU.exe 2>/dev/null | head -1 || true)
+          test -n "$EXE"
+          OUT=FastECU-${{ matrix.arch }}
+          mkdir -p "$OUT"
+          cp "$EXE" "$OUT/"
+          ls $MINGW_PREFIX/bin/*deployqt* || true
+          WDQ=$(ls $MINGW_PREFIX/bin/windeployqt6.exe $MINGW_PREFIX/bin/windeployqt-qt6.exe $MINGW_PREFIX/bin/windeployqt.exe 2>/dev/null | head -1 || true)
+          "$WDQ" --release --no-translations --verbose 1 "$OUT/FastECU.exe" || echo "windeployqt exit $?"
+          # Copy the MinGW runtime and other non-Qt DLLs from the MSYS2 prefix.
+          for i in 1 2 3; do
+            { ldd "$OUT"/*.exe "$OUT"/*.dll 2>/dev/null || true; } | awk '{print $3}' | { grep -i "^$MINGW_PREFIX/bin/" || true; } | sort -u | while read d; do
+              [ -f "$OUT/$(basename "$d")" ] || cp "$d" "$OUT/"
+            done
+          done
+          cp LICENSE "$OUT/LICENSE.txt"
+          ls -R "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastECU-windows-${{ matrix.arch }}
+          path: FastECU-${{ matrix.arch }}
+
+  build32:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          host: windows
+          target: desktop
+          arch: win32_mingw81
+          modules: 'qtcharts'
+          tools: 'tools_mingw,qt.tools.win32_mingw810'
+
+      # OpenSSL 3 for 32-bit MinGW (headers, import library, DLL) from MSYS2.
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW32
+          update: true
+          pacboy: openssl:p
+
+      - name: Configure
+        run: |
+          M="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')/mingw32"
+          ls "$M/bin"/libcrypto*.dll
+          mkdir -p ci-ossl/lib ci-ossl/bin
+          cp -r "$M/include/openssl" ci-ossl/
+          mkdir -p ci-ossl/include && mv ci-ossl/openssl ci-ossl/include/
+          cp "$M/lib/libcrypto.dll.a" ci-ossl/lib/libcrypto-3.dll.a
+          cp "$M"/bin/libcrypto*.dll ci-ossl/bin/
+          G=$(ls -d "$IQTA_TOOLS"/mingw810_32/bin 2>/dev/null || ls -d "$(cygpath -u "$IQTA_TOOLS")"/mingw810_32/bin)
+          echo "$G" >> $GITHUB_PATH
+          export PATH="$G:$PATH"
+          gcc --version | head -1
+          W=$(cygpath -m "$GITHUB_WORKSPACE")
+          mkdir -p build && cd build
+          qmake ../FastECU.pro CONFIG+=release \
+            "INCLUDEPATH+=$W/ci-ossl/include" \
+            "LIBS+=-L$W/ci-ossl/lib -lcrypto-3"
+
+      - name: Build
+        run: cd build && mingw32-make -j4
+
+      - name: Package
+        run: |
+          OUT=FastECU-i686
+          mkdir -p "$OUT"
+          cp build/release/FastECU.exe "$OUT/"
+          set -x
+          # windeployqt from Qt 5.15.2 cannot find the platform plugin here, so deploy by hand:
+          # every DLL the exe needs (recursively) from the Qt and MinGW bin folders, plus plugins.
+          cp ci-ossl/bin/*.dll "$OUT/"
+          Q="$(cygpath -u "$QT_ROOT_DIR")"
+          G=$(dirname "$(which gcc)")
+          for i in 1 2 3 4 5; do
+            for f in "$OUT"/*.exe "$OUT"/*.dll; do
+              objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'
+            done | sort -u | while read d; do
+              [ -f "$OUT/$d" ] && continue
+              for src in "$Q/bin/$d" "$G/$d"; do if [ -f "$src" ]; then cp "$src" "$OUT/"; break; fi; done
+            done || true
+          done
+          for pd in platforms styles imageformats iconengines bearer; do
+            if [ -d "$Q/plugins/$pd" ]; then mkdir -p "$OUT/$pd"; cp "$Q/plugins/$pd"/*.dll "$OUT/$pd/"; fi
+          done
+          # Second pass for the plugins' own dependencies.
+          for f in "$OUT"/*/*.dll; do objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'; done | sort -u | while read d; do
+            if [ ! -f "$OUT/$d" ] && [ -f "$Q/bin/$d" ]; then cp "$Q/bin/$d" "$OUT/"; fi
+          done || true
+          echo "Imports not shipped (should all be Windows system DLLs):"
+          for f in "$OUT"/*.exe "$OUT"/*.dll "$OUT"/*/*.dll; do objdump -p "$f" | sed -n 's/^\s*DLL Name: //p'; done | sort -u | while read d; do [ -f "$OUT/$d" ] || echo "  $d"; done || true
+          cp LICENSE "$OUT/LICENSE.txt"
+          ls -R "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastECU-windows-i686
+          path: FastECU-i686
+
+  release:
+    if: github.event_name == 'release'
+    needs: [ build, build32 ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd dist
+          for d in FastECU-windows-*; do
+            arch=${d#FastECU-windows-}
+            (cd "$d" && zip -qr "../../FastECU-$TAG-windows-$arch.zip" .)
+          done
+          cd ..
+          ls -la FastECU-*.zip
+          sed -e "s/@TAG@/$TAG/g" -e "s/@SHA@/${GITHUB_SHA}/g" .github/release-notes.md > notes.md
+          gh release upload "$TAG" FastECU-*.zip --clobber
+          gh release edit "$TAG" --prerelease --title "Test build $TAG (2019+ 2.0 DIT 2.5 MB read)" --notes-file notes.md
