@@ -1,9 +1,10 @@
 Unofficial test build of FastECU, not a FastECU release. It's built from
 [miikasyvanen/FastECU](https://github.com/miikasyvanen/FastECU) master plus the fix that makes the new protocol show
-up in the protocol list. It adds a read-only protocol for the 2019+ Subaru 2.0 DIT ECUs (Hitachi SH72544R, 2.5 MB of
-flash).
+up in the protocol list. It adds a UDS-native protocol for the 2022+ Subaru DIT ECUs (Renesas RH850/E1M-S2, 4 MB of
+flash — "LHB*" calibrations, e.g. WRX VB).
 
-**Not yet tested on a car.** It only reads; nothing is written to the ECU.
+**Not yet tested on a car.** Use it for reading. Writing is present in the protocol but unverified on a vehicle — do
+not flash a car with this build.
 
 ### Which zip
 
@@ -17,11 +18,11 @@ flash).
 2. If you've run FastECU 0.1.0-beta.5 before, close it and rename
    `%LOCALAPPDATA%\FastECU\0.1.0-beta.5\config\protocols.cfg` (for example to `protocols.cfg.old`). FastECU keeps
    its old protocol list otherwise, and the new entry won't appear.
-3. Select the protocol **"Subaru 2019+ 2.0 DIT CAN (Hitachi SH72544R/2.5MB), read only"** and read the ECU.
-4. A complete read is exactly **2,621,440 bytes**. Please open an issue with your ECU's calibration ID and the result,
-   good or bad.
+3. Select the protocol **"Subaru 2022+ DIT CAN (Renesas RH850/4MB), UDS-native read/write"** and read the ECU.
+4. A complete read is **4,128,768 bytes** (0x010000–0x400000). Please open an issue with your ECU's calibration ID
+   and the result, good or bad.
 
 ### Source
 
-Built from commit @SHA@ on branch `hitachi-sh72544-2.5mb`. FastECU is GPL-3.0; the license is in each zip and the
+Built from commit @SHA@ on branch `rh850-di-reader`. FastECU is GPL-3.0; the license is in each zip and the
 source is in this repository.
